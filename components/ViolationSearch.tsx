@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import PaymentForm from "./PaymentForm";
+import StatusUpdate from "./StatusUpdate";
 
 type Payment = {
   id: number;
@@ -50,7 +51,7 @@ export default function ViolationSearch() {
   };
 
   const handlePaymentAdded = () => {
-    handleSearch(); // Refresh results
+    handleSearch();
   };
 
   const handlePayAll = async () => {
@@ -62,11 +63,15 @@ export default function ViolationSearch() {
     });
     if (res.ok) {
       alert("All violations paid!");
-      handleSearch(); // Refresh results
+      handleSearch();
     } else {
       const errorData = await res.json();
       alert(`Error paying all: ${errorData.error}`);
     }
+  };
+
+  const handleStatusUpdated = () => {
+    handleSearch();
   };
 
   return (
@@ -109,6 +114,11 @@ export default function ViolationSearch() {
                         Attachment: <a href={v.attachment} target="_blank">{v.attachment}</a>
                       </p>
                     )}
+                    <StatusUpdate
+                      violationId={v.id}
+                      currentStatus={v.status}
+                      onStatusUpdated={handleStatusUpdated}
+                    />
                     {v.status !== "PAID" && (
                       <PaymentForm violationId={v.id} onPaymentAdded={handlePaymentAdded} />
                     )}
