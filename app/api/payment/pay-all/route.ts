@@ -1,3 +1,4 @@
+// app/api/payment/pay-all/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
@@ -10,58 +11,76 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { plateNumber } = body;
+  console.log("Received pay-all body:", body);
 
-  if (!plateNumber) {
-    return NextResponse.json({ error: "Plate number required" }, { status: 400 });
+  const { violationIds, totalAmount } = body;
+
+  if (!violationIds || !Array.isArray(violationIds) || violationIds.length === 0 || !Number.isFinite(totalAmount) || totalAmount <= 0) {
+    console.log("Invalid input:", { violationIds, totalAmount });
+    return NextResponse.json({ error: "Invalid violation IDs or total amount" }, { status: 400 });
   }
 
   const userId = parseInt(session.user.id, 10);
   if (isNaN(userId)) {
+    console.log("Invalid user ID:", session.user.id);
     return NextResponse.json({ error: "Invalid user ID" }, { status: 400 });
   }
 
-  // Fetch vehicle and its unpaid/partially paid violations
-  const vehicle = await prisma.vehicle.findUnique({
-    where: { plateNumber },
-    include: {
-      violations: {
-        where: { status: { in: ["UNPAID", "PARTIALLY_PAID"] } },
-        include: { payments: true },
-      },
-    },
-  });
+  try {
+    const violations = await prisma.violation.findMany({
+      where: { id: { in: violationIds } },
+      include: { payments: true },
+    });
 
-  if (!vehicle || vehicle.violations.length === 0) {
-    return NextResponse.json({ error: "No unpaid violations found" }, { status: 404 });
-  }
+    if (violations.length !== violationIds.length) {
+      console.log("Some violations not found:", { violationIds, found: violations.map(v => v.id) });
+      return NextResponse.json({ error: "Some violations not found" }, { status: 404 });
+    }
 
-  // Calculate total remaining balance
-  const totalRemaining = vehicle.violations.reduce((sum, v) => {
-    const paid = v.payments.reduce((pSum, p) => pSum + p.amount, 0);
-    return sum + (v.fineAmount - paid);
-  }, 0);
+    const totalRemaining = violations.reduce((sum, v) => {
+      const paid = v.payments?.reduce((pSum, p) => pSum + p.amount, 0) || 0;
+      return sum + (v.fineAmount - paid);
+    }, 0);
 
-  // Create a single payment to cover all remaining balances
-  const paymentPromises = vehicle.violations.map(async (violation) => {
-    const paidAmount = violation.payments.reduce((sum, p) => sum + p.amount, 0);
-    const remaining = violation.fineAmount - paidAmount;
-    if (remaining > 0) {
-      await prisma.payment.create({
+    if (totalAmount !== totalRemaining) {
+      console.log("Total amount does not match remaining balance:", { totalAmount, totalRemaining });
+      return NextResponse.json({ error: "Total amount does not match remaining balance" }, { status: 400 });
+    }
+
+    const transactions = violations.map((v) => {
+      const paid = v.payments?.reduce((pSum, p) => pSum + p.amount, 0) || 0;
+      const remaining = v.fineAmount - paid;
+      return prisma.payment.create({
         data: {
-          violation: { connect: { id: violation.id } },
+          violation: { connect: { id: v.id } },
           amount: remaining,
-          updater: { connect: { id: userId } },
+          updater: { connect: { id: userId } }, // Use updater relation; remove updatedBy
         },
       });
-      await prisma.violation.update({
-        where: { id: violation.id },
+    });
+
+    const updates = violations.map((v) =>
+      prisma.violation.update({
+        where: { id: v.id },
         data: { status: "PAID" },
-      });
-    }
-  });
+      })
+    );
 
-  await Promise.all(paymentPromises);
+    const actions = violations.map((v) =>
+      prisma.action.create({
+        data: {
+          user: { connect: { id: userId } },
+          action: `Recorded full payment for violation ${v.id}, updated status to PAID`,
+        },
+      })
+    );
 
-  return NextResponse.json({ message: "All violations paid", totalPaid: totalRemaining }, { status: 200 });
+    await prisma.$transaction([...transactions, ...updates, ...actions]);
+
+    return NextResponse.json({ message: "All payments recorded" });
+  } catch (error) {
+    console.error("Failed to record pay-all:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown server error";
+    return NextResponse.json({ error: `Failed to record all payments: ${errorMessage}` }, { status: 500 });
+  }
 }

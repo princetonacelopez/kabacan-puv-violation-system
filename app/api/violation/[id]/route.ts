@@ -1,76 +1,112 @@
+// app/api/violation/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 
-interface Params {
-  id: string;
-}
-
-export async function PUT(req: NextRequest, { params }: { params: Params }) {
+export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session || !["ADMIN", "TRAFFIC_ENFORCER"].includes(session.user.role)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const body = await req.json();
-  const { status, attachment } = body;
+  console.log("Received POST body:", body); // Log the request body for debugging
+
+  const { plateNumber, vehicleType, violationType, dateTime, attachment } = body;
+
+  // Validate required fields
+  if (!plateNumber || !vehicleType || !violationType || !dateTime) {
+    return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+  }
+
+  // Calculate fine amount
+  const fineAmount = vehicleType === "MULTICAB" ? 20 : 30;
+
+  // Upsert vehicle if it doesn’t exist
+  const vehicle = await prisma.vehicle.upsert({
+    where: { plateNumber },
+    update: {},
+    create: { plateNumber, vehicleType },
+  });
 
   const userId = parseInt(session.user.id, 10);
   if (isNaN(userId)) {
     return NextResponse.json({ error: "Invalid user ID" }, { status: 400 });
   }
 
-  const violationId = parseInt(params.id);
-  const currentViolation = await prisma.violation.findUnique({
-    where: { id: violationId },
+  // Create violation
+  const violation = await prisma.violation.create({
+    data: {
+      vehicle: { connect: { id: vehicle.id } },
+      violationType,
+      dateTime: new Date(dateTime),
+      location: "", // Default to empty string since location is removed from the form
+      fineAmount,
+      status: "UNPAID",
+      attachment,
+      creator: { connect: { id: userId } },
+    },
   });
 
-  if (!currentViolation) {
-    return NextResponse.json({ error: "Violation not found" }, { status: 404 });
-  }
-
-  // Update violation and log the status change
-  const updatedViolation = await prisma.$transaction([
-    prisma.violation.update({
-      where: { id: violationId },
-      data: { status, attachment },
-    }),
-    prisma.action.create({
-      data: {
-        user: { connect: { id: userId } },
-        action: `Updated violation ${violationId} status from ${currentViolation.status} to ${status || currentViolation.status}`,
-      },
-    }),
-  ]);
-
-  return NextResponse.json(updatedViolation[0]); // Return the updated violation
+  return NextResponse.json(violation, { status: 201 });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: Params }) {
+export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session || session.user.role !== "ADMIN") {
+  if (!session || !["ADMIN", "TRAFFIC_ENFORCER"].includes(session.user.role)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const violationId = parseInt(params.id);
-  const userId = parseInt(session.user.id, 10);
-  if (isNaN(userId)) {
-    return NextResponse.json({ error: "Invalid user ID" }, { status: 400 });
-  }
+  const { searchParams } = new URL(req.url);
+  const plateNumber = searchParams.get("plateNumber");
 
-  // Delete violation and log the action
-  await prisma.$transaction([
-    prisma.violation.delete({
-      where: { id: violationId },
-    }),
-    prisma.action.create({
-      data: {
-        user: { connect: { id: userId } },
-        action: `Deleted violation ${violationId}`,
+  if (plateNumber) {
+    const vehicle = await prisma.vehicle.findUnique({
+      where: { plateNumber },
+      include: {
+        violations: {
+          include: {
+            payments: true,
+          },
+        },
       },
-    }),
-  ]);
+    });
 
-  return NextResponse.json({ message: "Violation deleted" });
+    if (!vehicle) {
+      return NextResponse.json({ error: "Vehicle not found" }, { status: 404 });
+    }
+
+    const violations = vehicle.violations.map((violation) => {
+      const paidAmount = violation.payments.reduce((sum, payment) => sum + payment.amount, 0);
+      const remainingBalance = violation.fineAmount - paidAmount;
+      return {
+        ...violation,
+        paidAmount,
+        remainingBalance,
+      };
+    });
+
+    const totalFines = violations.reduce((sum, v) => sum + v.fineAmount, 0);
+    const totalPaid = violations.reduce((sum, v) => sum + v.paidAmount, 0);
+    const totalRemaining = totalFines - totalPaid;
+
+    return NextResponse.json({
+      vehicle: {
+        plateNumber: vehicle.plateNumber,
+        vehicleType: vehicle.vehicleType,
+      },
+      violations,
+      fineSummary: {
+        totalFines,
+        totalPaid,
+        remainingBalance: totalRemaining,
+      },
+    });
+  } else {
+    const violations = await prisma.violation.findMany({
+      include: { vehicle: true, payments: true },
+    });
+    return NextResponse.json(violations);
+  }
 }

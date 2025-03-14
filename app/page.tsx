@@ -1,29 +1,24 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import ViolationForm from "@/components/ViolationForm";
-import ViolationList from "@/components/ViolationList";
-import ViolationSearch from "@/components/ViolationSearch";
-import Dashboard from "@/components/Dashboard";
+// app/page.tsx
+"use client";
+
+import { useSession } from "next-auth/react";
 import { redirect } from "next/navigation";
+import { useEffect } from "react";
 
-export default async function Home() {
-  const session = await getServerSession(authOptions);
-  if (!session) {
-    redirect("/auth/signin");
-  }
+export default function Home() {
+  const { data: session, status } = useSession();
 
-  return (
-    <main className="p-6">
-      <h1 className="text-3xl mb-6">Kabacan PUV Violation System</h1>
-      {session.user.role === "ADMIN" ? (
-        <Dashboard />
-      ) : (
-        <div className="space-y-8">
-          <ViolationSearch />
-          <ViolationForm />
-          <ViolationList />
-        </div>
-      )}
-    </main>
-  );
+  useEffect(() => {
+    if (status === "authenticated") {
+      if (session?.user?.role === "ADMIN") {
+        redirect("/dashboard");
+      } else if (session?.user?.role === "TRAFFIC_ENFORCER") {
+        redirect("/violations");
+      }
+    } else if (status === "unauthenticated") {
+      redirect("/auth/signin");
+    }
+  }, [status, session]);
+
+  return <div>Loading...</div>;
 }
