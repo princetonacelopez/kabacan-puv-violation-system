@@ -1,7 +1,8 @@
+// components/Sidebar.tsx
 "use client";
 
 import * as React from "react";
-import { BarChart, File, FileText, Inbox, Key, Shield, Truck, UserCog } from "lucide-react";
+import { BarChart, File, FileText, Inbox, Key, Shield, Bus, UserCog } from "lucide-react"; // Replaced Truck with Bus
 import { NavUser } from "@/components/nav-user";
 import {
   Sidebar,
@@ -19,11 +20,14 @@ import ViolationSearch from "@/components/ViolationSearch";
 import { Command } from "@/components/ui/command";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { useViolations } from "@/app/contexts/ViolationsContext"; // Corrected path
+import { useViolations } from "@/app/contexts/ViolationsContext";
+import { Button } from "@/components/ui/button";
+import { Plus, Upload, Car } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 
 type Violation = {
   id: string;
-  vehicle?: { plateNumber: string; vehicleType: string };
+  vehicle: { plateNumber: string; vehicleType: string };
   violationType: string;
   dateTime: string;
   fineAmount: number;
@@ -54,8 +58,8 @@ const sidebarData = {
   ],
   manageMenu: [
     {
-      title: "Violations",
-      url: "/violations",
+      title: "Vehicles",
+      url: "/vehicles",
       icon: Inbox,
       isActive: false,
     },
@@ -68,7 +72,7 @@ const sidebarData = {
     {
       title: "Vehicle Types",
       url: "/vehicle-types",
-      icon: Truck,
+      icon: Bus, // Using Bus as a placeholder for vehicle types
       isActive: false,
     },
     {
@@ -92,13 +96,33 @@ const sidebarData = {
   ],
 };
 
-export function SidebarComponent({ page }: { page: string }) {
+const formatDate = (dateStr: string) => {
+  const date = new Date(dateStr);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+
+  if (date.toDateString() === today.toDateString()) return "Today";
+  if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" }).replace(/^\w/, (c) => c.toUpperCase());
+};
+
+export function SidebarComponent({
+  page,
+  setShowCreateForm,
+  setShowImportDialog,
+}: {
+  page: string;
+  setShowCreateForm: (value: boolean) => void;
+  setShowImportDialog: (value: boolean) => void;
+}) {
   const { setOpen, isOpen } = useSidebar();
   const router = useRouter();
   const { data: session } = useSession();
   const { violations, setViewViolations, searchPlateNumber, setSearchPlateNumber } = useViolations();
 
-  console.log("SidebarComponent violations:", violations); // Debug log
+  console.log("SidebarComponent violations:", violations);
 
   // Set active item based on the current page
   const [activeItem, setActiveItem] = React.useState(
@@ -123,7 +147,12 @@ export function SidebarComponent({ page }: { page: string }) {
       }, {})
     : {};
 
-  const violationItems: GroupedViolation[] = Object.values(groupedViolations).slice(0, 5); // Explicitly typed as GroupedViolation[]
+  // Sort by most recent violation date
+  const violationItems: GroupedViolation[] = Object.values(groupedViolations).sort((a, b) => {
+    const latestA = a.violations.length > 0 ? new Date(a.violations[0].dateTime) : new Date(0);
+    const latestB = b.violations.length > 0 ? new Date(b.violations[0].dateTime) : new Date(0);
+    return latestB.getTime() - latestA.getTime();
+  });
 
   // Update user data based on session
   const user = session?.user
@@ -143,14 +172,18 @@ export function SidebarComponent({ page }: { page: string }) {
     router.push(item.url);
   };
 
-  if (page === "violations") {
+  const getVehicleStatus = (violations: Violation[]) => {
+    const allPaid = violations.every((v) => v.status === "PAID");
+    const hasUnpaid = violations.some((v) => v.status === "UNPAID");
+    if (allPaid) return "PAID";
+    if (hasUnpaid) return "UNPAID";
+    return "PARTIALLY_PAID";
+  };
+
+  if (page === "vehicles") {
     return (
-      <Sidebar
-      collapsible="icon"
-      className="overflow-hidden [&>[data-sidebar=sidebar]]:flex-row">
-        <Sidebar
-          collapsible="none"
-          className="!w-[calc(var(--sidebar-width-icon)_+_1px)] border-r">
+      <Sidebar collapsible="icon" className="overflow-hidden [&>[data-sidebar=sidebar]]:flex-row">
+        <Sidebar collapsible="none" className="!w-[calc(var(--sidebar-width-icon)_+_1px)] border-r">
           <SidebarHeader>
             <SidebarMenu>
               <SidebarMenuItem>
@@ -219,9 +252,17 @@ export function SidebarComponent({ page }: { page: string }) {
         <Sidebar collapsible="none" className="hidden flex-1 md:flex">
           <SidebarHeader className="gap-3.5 border-b p-4">
             <div className="flex w-full items-center justify-between">
-              <div className="text-base font-medium text-foreground">
-                {activeItem?.title}
-              </div>
+              <div className="text-base font-medium text-foreground">Vehicles</div>
+              {session?.user?.role === "ADMIN" && (
+                <div className="flex space-x-2">
+                  <Button variant="ghost" size="sm" onClick={() => setShowCreateForm(true)}>
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setShowImportDialog(true)}>
+                    <Upload className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
             </div>
             <ViolationSearch
               searchPlateNumber={searchPlateNumber}
@@ -232,25 +273,54 @@ export function SidebarComponent({ page }: { page: string }) {
             <SidebarGroup className="px-0">
               <SidebarGroupContent>
                 {violationItems.length > 0 ? (
-                  violationItems.map((group: GroupedViolation) => (
-                    <a
-                      href="#"
-                      key={group.plateNumber}
-                      className="flex flex-col items-start gap-2 whitespace-nowrap border-b p-4 text-sm leading-tight last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                      onClick={() => setViewViolations(group)}
-                    >
-                      <div className="flex w-full items-center gap-2">
-                        <span>{group.plateNumber}</span>
-                        <span className="ml-auto text-xs">{group.violations[0]?.dateTime.split("T")[0]}</span>
-                      </div>
-                      <span className="font-medium">{group.vehicleType}</span>
-                      <span className="line-clamp-2 w-[260px] whitespace-break-spaces text-xs">
-                        {`${group.violations.length} violation(s), Total Fine: ₱${group.violations.reduce((sum, v) => sum + v.fineAmount, 0).toFixed(0)}`}
-                      </span>
-                    </a>
-                  ))
+                  violationItems.map((group: GroupedViolation) => {
+                    const totalFine = group.violations.reduce((sum, v) => sum + v.fineAmount, 0);
+                    const paidAmount = group.violations
+                      .flatMap((v) => v.payments || [])
+                      .reduce((sum, p) => sum + p.amount, 0);
+                    const remainingBalance = totalFine - paidAmount;
+                    const status = getVehicleStatus(group.violations);
+                    return (
+                      <a
+                        href="#"
+                        key={group.plateNumber}
+                        className="flex flex-col items-start gap-2 whitespace-nowrap border-b p-4 text-sm leading-tight last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                        onClick={() => setViewViolations(group)}
+                      >
+                        <div className="flex w-full items-center gap-2">
+                          {group.vehicleType === "MULTICAB" ? (
+                            <Bus className="h-4 w-4 text-muted-foreground" /> // Correct icon for Multicab
+                          ) : (
+                            <Car className="h-4 w-4 text-muted-foreground" /> // Truck for VAN
+                          )}
+                          <span>{group.plateNumber}</span>
+                          <span className="ml-auto text-xs">
+                            {group.violations.length > 0
+                              ? formatDate(group.violations[0].dateTime)
+                              : "N/A"}
+                          </span>
+                        </div>
+                        <span className="line-clamp-2 w-[260px] whitespace-break-spaces text-xs">
+                          {`${group.violations.length} violation(s), Remaining Balance: ₱${remainingBalance.toFixed(
+                            0
+                          )}`}
+                        </span>
+                        <Badge
+                          variant={
+                            status === "PAID"
+                              ? "success"
+                              : status === "UNPAID"
+                              ? "destructive"
+                              : "default" // Yellow for PARTIALLY_PAID
+                          }
+                        >
+                          {status}
+                        </Badge>
+                      </a>
+                    );
+                  })
                 ) : (
-                  <div className="p-4 text-sm text-muted-foreground">No violations found</div>
+                  <div className="p-4 text-sm text-muted-foreground">No vehicles found</div>
                 )}
               </SidebarGroupContent>
             </SidebarGroup>

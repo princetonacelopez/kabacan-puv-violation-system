@@ -36,7 +36,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
         <SidebarProvider
             style={
-              page === 'violations' 
+              page === 'vehicles' 
                 ? {
                     "--sidebar-width": "350px",
                   } as React.CSSProperties
