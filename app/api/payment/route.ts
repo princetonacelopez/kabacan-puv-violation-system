@@ -3,92 +3,105 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { randomUUID } from "crypto";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session || !["ADMIN", "TRAFFIC_ENFORCER"].includes(session.user.role)) {
+  if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
     const payments = await prisma.payment.findMany({
       include: {
-        violation: true,
+        violation: {
+          include: {
+            vehicle: true,
+          },
+        },
       },
     });
+
     return NextResponse.json(payments);
   } catch (error) {
     console.error("Error fetching payments:", error);
-    return NextResponse.json({ error: "Failed to fetch payments" }, { status: 500 });
+    const errorMessage = error instanceof Error ? error.message : "Unknown server error";
+    return NextResponse.json({ error: `Failed to fetch payments: ${errorMessage}` }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session || !["ADMIN", "TRAFFIC_ENFORCER"].includes(session.user.role)) {
+  if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json();
-  console.log("Received payment body:", body);
-
-  const { violationId, amount } = body;
-
-  if (!violationId || !Number.isFinite(amount) || amount <= 0) {
-    console.log("Invalid input:", { violationId, amount });
-    return NextResponse.json({ error: "Invalid violation ID or amount" }, { status: 400 });
-  }
-
-  const userId = parseInt(session.user.id, 10);
-  if (isNaN(userId)) {
-    console.log("Invalid user ID:", session.user.id);
-    return NextResponse.json({ error: "Invalid user ID" }, { status: 400 });
-  }
-
-  const violation = await prisma.violation.findUnique({
-    where: { id: violationId },
-    include: { payments: true },
-  });
-
-  if (!violation) {
-    console.log("Violation not found:", violationId);
-    return NextResponse.json({ error: "Violation not found" }, { status: 404 });
-  }
-
-  const totalPaid = violation.payments.reduce((sum, payment) => sum + payment.amount, 0);
-  const remainingBalance = violation.fineAmount - totalPaid;
-
-  if (amount > remainingBalance) {
-    console.log("Payment exceeds remaining balance:", { amount, remainingBalance });
-    return NextResponse.json({ error: "Payment amount exceeds remaining balance" }, { status: 400 });
-  }
-
-  const newStatus = amount === remainingBalance ? "PAID" : totalPaid + amount < violation.fineAmount ? "PARTIALLY_PAID" : "PAID";
-
   try {
-    const updatedViolation = await prisma.$transaction([
-      prisma.payment.create({
-        data: {
-          violation: { connect: { id: violationId } },
-          amount,
-          updater: { connect: { id: userId } },
-        },
-      }),
-      prisma.violation.update({
-        where: { id: violationId },
-        data: { status: newStatus },
-      }),
-      prisma.action.create({
-        data: {
-          user: { connect: { id: userId } },
-          action: `Recorded payment of ₱${amount} for violation ${violationId}, updated status to ${newStatus}`,
-        },
-      }),
-    ]);
+    const body = await req.json();
+    const { violationId, amount } = body;
 
-    return NextResponse.json(updatedViolation[1]);
+    if (!violationId || typeof amount !== "number") {
+      return NextResponse.json({ error: "Missing or invalid required fields" }, { status: 400 });
+    }
+
+    // Ensure amount is a whole number
+    const paymentAmount = Math.floor(amount);
+    if (paymentAmount <= 0) {
+      return NextResponse.json({ error: "Payment amount must be a positive whole number" }, { status: 400 });
+    }
+
+    const violation = await prisma.violation.findUnique({
+      where: { id: violationId },
+      include: { payments: true },
+    });
+
+    if (!violation) {
+      return NextResponse.json({ error: "Violation not found" }, { status: 404 });
+    }
+
+    // Calculate total paid so far
+    const totalPaid = violation.payments.reduce((sum, payment) => sum + payment.amount, 0);
+    const remainingFine = violation.fineAmount - totalPaid;
+
+    // Prevent overpayment
+    if (paymentAmount > remainingFine) {
+      return NextResponse.json(
+        { error: `Payment amount (${paymentAmount}) exceeds remaining fine (${remainingFine})` },
+        { status: 400 }
+      );
+    }
+
+    const userId = session.user.id;
+    const payment = await prisma.payment.create({
+      data: {
+        id: randomUUID(),
+        violationId,
+        amount: paymentAmount,
+        updatedBy: userId,
+      },
+      include: {
+        violation: true,
+      },
+    });
+
+    // Update violation status based on new payment
+    const newTotalPaid = totalPaid + paymentAmount;
+    const newRemaining = violation.fineAmount - newTotalPaid;
+    let newStatus = violation.status;
+    if (newRemaining <= 0) {
+      newStatus = "PAID";
+    } else if (newTotalPaid > 0) {
+      newStatus = "PARTIALLY_PAID";
+    }
+
+    await prisma.violation.update({
+      where: { id: violationId },
+      data: { status: newStatus },
+    });
+
+    return NextResponse.json(payment);
   } catch (error) {
-    console.error("Failed to record payment:", error);
+    console.error("Error recording payment:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown server error";
     return NextResponse.json({ error: `Failed to record payment: ${errorMessage}` }, { status: 500 });
   }

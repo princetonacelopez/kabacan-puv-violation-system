@@ -4,75 +4,40 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useSession } from "next-auth/react";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "sonner";
+import { Bus, Truck } from "lucide-react";
 
-type ViolationFormData = {
-  plateNumber: string;
-  vehicleType: string;
-  violationType: string;
-  dateTime: string;
-  fineAmount: string;
-  status: string;
+type CreateViolationFormProps = {
+  onSuccess: () => void;
+  onCancel: () => void;
 };
 
-export default function CreateViolationForm({
-  onSuccess,
-  onCancel,
-}: {
-  onSuccess?: () => void;
-  onCancel?: () => void;
-}) {
-  const { data: session } = useSession();
-  const [formData, setFormData] = useState<ViolationFormData>({
+export default function CreateViolationForm({ onSuccess, onCancel }: CreateViolationFormProps) {
+  const [formData, setFormData] = useState({
     plateNumber: "",
     vehicleType: "MULTICAB",
     violationType: "TERMINAL_FEE",
-    dateTime: new Date().toISOString().slice(0, 16),
-    fineAmount: "",
-    status: "UNPAID",
+    dateTime: "",
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!session || !["ADMIN", "TRAFFIC_ENFORCER"].includes(session.user.role)) {
-      toast.error("Unauthorized: Please log in as an admin or traffic enforcer.");
-      return;
-    }
-
-    const violationData = {
-      ...formData,
-      fineAmount: parseFloat(formData.fineAmount),
-      dateTime: new Date(formData.dateTime).toISOString(),
-    };
-
     try {
       const response = await fetch("/api/violation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(violationData),
+        body: JSON.stringify(formData),
         credentials: "include",
       });
-
       if (!response.ok) {
-        const text = await response.text();
-        let errorData;
-        try {
-          errorData = JSON.parse(text);
-        } catch (parseError) {
-          console.error("Failed to parse error response:", text);
-          throw new Error(`Server error: ${text || "No response body"} (Status: ${response.status})`);
-        }
-        console.error("Error creating violation:", errorData);
-        throw new Error(errorData.error || `Failed to create violation (Status: ${response.status})`);
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to create violation");
       }
-
-      await response.json();
-      if (onSuccess) onSuccess();
       toast.success("Violation created successfully!");
+      onSuccess();
     } catch (error) {
-      console.error("Error creating violation:", error);
       toast.error(error instanceof Error ? error.message : "Failed to create violation");
     }
   };
@@ -80,63 +45,61 @@ export default function CreateViolationForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label>Plate Number</label>
+        <Label>Plate Number</Label>
         <Input
-          type="text"
           value={formData.plateNumber}
-          onChange={(e) => setFormData({ ...formData, plateNumber: e.target.value })}
+          onChange={(e) => setFormData({ ...formData, plateNumber: e.target.value.toUpperCase() })}
+          placeholder="ABC-1234"
           required
+          className="mt-1"
         />
       </div>
       <div>
-        <label>Vehicle Type</label>
-        <select
+        <Label>Vehicle Type</Label>
+        <RadioGroup
           value={formData.vehicleType}
-          onChange={(e) => setFormData({ ...formData, vehicleType: e.target.value })}
+          onValueChange={(value) => setFormData({ ...formData, vehicleType: value })}
+          className="grid grid-cols-2 gap-4 mt-2"
         >
-          <option value="MULTICAB">Multicab</option>
-          <option value="VAN">Van</option>
-        </select>
+          <div>
+            <RadioGroupItem value="MULTICAB" id="multicab" className="peer sr-only" />
+            <Label
+              htmlFor="multicab"
+              className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-transparent p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary"
+            >
+              <Bus className="mb-3 h-6 w-6" />
+              Multicab
+            </Label>
+          </div>
+          <div>
+            <RadioGroupItem value="VAN" id="van" className="peer sr-only" />
+            <Label
+              htmlFor="van"
+              className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-transparent p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary"
+            >
+              <Truck className="mb-3 h-6 w-6" />
+              Van
+            </Label>
+          </div>
+        </RadioGroup>
       </div>
       <div>
-        <label>Violation Type</label>
-        <select
+        <Label>Violation Type</Label>
+        <Input
           value={formData.violationType}
-          onChange={(e) => setFormData({ ...formData, violationType: e.target.value })}
-        >
-          <option value="TERMINAL_FEE">Terminal Fee</option>
-        </select>
+          disabled
+          className="mt-1"
+        />
       </div>
       <div>
-        <label>Date and Time</label>
+        <Label>Date and Time</Label>
         <Input
           type="datetime-local"
           value={formData.dateTime}
           onChange={(e) => setFormData({ ...formData, dateTime: e.target.value })}
           required
+          className="mt-1"
         />
-      </div>
-      <div>
-        <label>Fine Amount</label>
-        <Input
-          type="number"
-          value={formData.fineAmount}
-          onChange={(e) => setFormData({ ...formData, fineAmount: e.target.value })}
-          step="0.01"
-          min="0"
-          required
-        />
-      </div>
-      <div>
-        <label>Status</label>
-        <select
-          value={formData.status}
-          onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-        >
-          <option value="UNPAID">Unpaid</option>
-          <option value="PARTIALLY_PAID">Partially Paid</option>
-          <option value="PAID">Paid</option>
-        </select>
       </div>
       <div className="flex justify-end space-x-2">
         <Button type="button" variant="outline" onClick={onCancel}>
