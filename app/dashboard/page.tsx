@@ -2,27 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  XAxis,
-  YAxis,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  Label,
-  LabelList,
-} from "recharts";
-import {
-  ChartConfig,
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@/components/ui/chart";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -33,39 +13,70 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
+import { useSession } from "next-auth/react";
 import { toast } from "sonner";
-import { TrendingUp, TrendingDown } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  ChartLegend,
+  ChartLegendContent,
+} from "@/components/ui/chart";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis, PieChart, Pie, Cell, AreaChart, Area, Label } from "recharts";
+import { format, subMonths, startOfMonth } from "date-fns";
+import { Skeleton } from "@/components/ui/skeleton";
 
 type Violation = {
   id: string;
-  vehicle?: { plateNumber: string; vehicleType: string };
+  vehicle: { plateNumber: string; vehicleType: string };
   violationType: string;
   dateTime: string;
   fineAmount: number;
   status: string;
-  payments?: { amount: number; dateTime: string }[];
+  payments?: { amount: number }[];
 };
 
-type Payment = {
-  id: string;
-  violationId: string;
-  amount: number;
-  dateTime: string;
-  violation: {
-    vehicle: { plateNumber: string };
-  };
+type GroupedViolation = {
+  plateNumber: string;
+  vehicleType: string;
+  violations: Violation[];
 };
 
-// Chart configurations
-const chartConfig: ChartConfig = {
+type PaginatedResponse = {
+  vehicles: { plateNumber: string; vehicleType: string; violations: Violation[] }[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+
+// Chart configuration
+const chartConfig = {
   violations: {
     label: "Violations",
     color: "hsl(var(--chart-1))",
   },
-  fines: {
-    label: "Fines",
+  unpaid: {
+    label: "Unpaid",
     color: "hsl(var(--chart-2))",
+  },
+  partiallypaid: {
+    label: "Partially Paid",
+    color: "hsl(var(--chart-3))",
+  },
+  paid: {
+    label: "Paid",
+    color: "hsl(var(--chart-1))",
   },
   multicab: {
     label: "Multicab",
@@ -75,248 +86,266 @@ const chartConfig: ChartConfig = {
     label: "Van",
     color: "hsl(var(--chart-2))",
   },
-  amount: {
-    label: "Amount",
-  },
-  paid: {
-    label: "Paid",
-    color: "hsl(var(--chart-1))",
-  },
-  partiallyPaid: {
-    label: "Partially Paid",
-    color: "hsl(var(--chart-2))",
-  },
-  unpaid: {
-    label: "Unpaid",
-    color: "hsl(var(--chart-3))",
-  },
-};
+} satisfies ChartConfig;
 
 export default function DashboardPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
-  const [violations, setViolations] = useState<Violation[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [vehicles, setVehicles] = useState<GroupedViolation[]>([]);
+  const [chartData, setChartData] = useState<{ month: string; violations: number }[]>([]);
+  const [finesBreakdownData, setFinesBreakdownData] = useState<
+    { status: string; amount: number }[]
+  >([]);
+  const [vehicleTypeData, setVehicleTypeData] = useState<
+    { month: string; multicab: number; van: number }[]
+  >([]);
+  const [allViolations, setAllViolations] = useState<Violation[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     if (status === "unauthenticated") {
       router.push("/auth/signin");
       return;
     }
-    if (status === "authenticated" && session?.user?.role !== "ADMIN") {
-      router.push("/violations");
-      return;
+    if (status === "authenticated" && !vehicles.length) {
+      fetchAllVehicles().finally(() => setIsLoading(false));
+    } else {
+      setIsLoading(false);
     }
-    if (status === "authenticated") {
-      fetchData();
-    }
-  }, [status, router, session]);
+  }, [status, router, vehicles.length]);
 
-  const fetchData = async () => {
+  useEffect(() => {
+    if (vehicles.length > 0) {
+      updateChartData();
+      updateFinesBreakdown();
+      updateVehicleTypeData();
+      updateAllViolations();
+    }
+  }, [vehicles]);
+
+  const fetchAllVehicles = async () => {
     try {
-      const violationsResponse = await fetch("/api/violation", {
+      console.log("Fetching vehicles with session:", session);
+      const response = await fetch(`/api/vehicle?page=1&limit=1000`, {
         credentials: "include",
       });
-      if (!violationsResponse.ok) {
-        const errorData = await violationsResponse.json();
-        throw new Error(`Failed to fetch violations: ${errorData.error || violationsResponse.statusText}`);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to fetch vehicles");
       }
-      const violationsData = await violationsResponse.json();
+      const data: PaginatedResponse = await response.json();
+      console.log("Raw API response:", data);
 
-      const paymentsResponse = await fetch("/api/payment", {
-        credentials: "include",
-      });
-      if (!paymentsResponse.ok) {
-        let errorData;
-        try {
-          errorData = await paymentsResponse.json();
-        } catch (jsonError) {
-          console.error("Failed to parse payments response as JSON:", jsonError);
-          const rawText = await paymentsResponse.text();
-          console.error("Raw payments response body:", rawText);
-          console.error("Payments response headers:", Object.fromEntries(paymentsResponse.headers.entries()));
-          errorData = { error: rawText || "No error message provided" };
-        }
-        throw new Error(`Failed to fetch payments: ${errorData.error || paymentsResponse.statusText}`);
-      }
-      const paymentData = await paymentsResponse.json();
+      const groupedViolations: GroupedViolation[] = data.vehicles
+        .filter((vehicle) => vehicle.violations && vehicle.violations.length > 0)
+        .map((vehicle) => ({
+          plateNumber: vehicle.plateNumber,
+          vehicleType: vehicle.vehicleType,
+          violations: vehicle.violations.map((violation) => ({
+            ...violation,
+            vehicle: {
+              plateNumber: vehicle.plateNumber,
+              vehicleType: vehicle.vehicleType,
+            },
+          })),
+        }));
+      console.log("Transformed groupedViolations:", groupedViolations);
 
-      setViolations(violationsData.violations);
-      setPayments(paymentData);
+      setVehicles(groupedViolations);
     } catch (error) {
-      console.error("Error fetching dashboard data:", error);
-      setError(error instanceof Error ? error.message : "Failed to fetch dashboard data");
-    } finally {
-      setLoading(false);
+      console.error("Error fetching vehicles:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to fetch vehicles");
+      setVehicles([]);
     }
   };
 
-  // Process monthly violations
-  const processMonthlyViolations = (data: Violation[]) => {
-    if (!Array.isArray(data)) {
-      console.error("processMonthlyViolations: data is not an array", data);
-      return [];
-    }
-    const months = [];
-    const startDate = new Date("2024-10-01T00:00:00Z");
-    const endDate = new Date("2025-03-31T23:59:59Z");
-    let currentDate = new Date(startDate);
-    while (currentDate <= endDate) {
-      months.push(currentDate.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "Asia/Manila" }));
-      currentDate.setUTCMonth(currentDate.getUTCMonth() + 1);
-    }
+  const updateChartData = () => {
+    const flatViolations = vehicles.flatMap((group) => group.violations);
+    const endDate = new Date("2025-03-16");
+    const startDate = startOfMonth(subMonths(endDate, 5));
 
-    const monthlyData = months.map((month) => {
-      const violationsInMonth = data.filter((violation) => {
-        const violationDate = new Date(violation.dateTime);
-        const monthYear = violationDate.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "Asia/Manila" });
-        return monthYear === month;
-      }).length;
-      return { month: month.slice(0, 3), violations: violationsInMonth };
+    const filteredViolations = flatViolations.filter((violation) => {
+      const violationDate = new Date(violation.dateTime);
+      return violationDate >= startDate && violationDate <= endDate;
     });
-    return monthlyData;
-  };
 
-  // Process monthly fines
-  const processMonthlyFines = (data: Payment[]) => {
-    if (!Array.isArray(data)) {
-      console.error("processMonthlyFines: data is not an array", data);
-      return [];
-    }
-    const months = [];
-    const startDate = new Date("2024-10-01T00:00:00Z");
-    const endDate = new Date("2025-03-31T23:59:59Z");
-    let currentDate = new Date(startDate);
-    while (currentDate <= endDate) {
-      months.push(currentDate.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "Asia/Manila" }));
-      currentDate.setUTCMonth(currentDate.getUTCMonth() + 1);
+    const monthMap: { [key: string]: number } = {};
+    for (let i = 0; i < 6; i++) {
+      const monthDate = subMonths(new Date("2025-03-16"), i);
+      const monthKey = format(monthDate, "yyyy-MM");
+      monthMap[monthKey] = 0;
     }
 
-    const monthlyData = months.map((month) => {
-      const finesInMonth = data
-        .filter((payment) => {
-          const paymentDate = new Date(payment.dateTime);
-          const monthYear = paymentDate.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "Asia/Manila" });
-          return monthYear === month;
-        })
-        .reduce((sum, payment) => sum + payment.amount, 0);
-      return { month: month.slice(0, 3), fines: finesInMonth };
-    });
-    return monthlyData;
-  };
-
-  // Process vehicle type violations
-  const processVehicleTypeViolations = (data: Violation[]) => {
-    if (!Array.isArray(data)) {
-      console.error("processVehicleTypeViolations: data is not an array", data);
-      return [];
-    }
-    const months = [];
-    const startDate = new Date("2024-10-01T00:00:00Z");
-    const endDate = new Date("2025-03-31T23:59:59Z");
-    let currentDate = new Date(startDate);
-    while (currentDate <= endDate) {
-      months.push(currentDate.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "Asia/Manila" }));
-      currentDate.setUTCMonth(currentDate.getUTCMonth() + 1);
-    }
-
-    const monthlyData = months.map((month) => {
-      const result: any = { month: month.slice(0, 3) };
-      const vehicleTypes = ["MULTICAB", "VAN"];
-      vehicleTypes.forEach((type) => {
-        const violationsInMonth = data.filter((violation) => {
-          const violationDate = new Date(violation.dateTime);
-          const monthYear = violationDate.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "Asia/Manila" });
-          return (
-            monthYear === month &&
-            violation.vehicle?.vehicleType === type
-          );
-        }).length;
-        result[type.toLowerCase()] = violationsInMonth;
-      });
-      return result;
-    });
-    return monthlyData;
-  };
-
-  // Process total fees breakdown
-  const processFeesBreakdown = (data: Violation[]) => {
-    if (!Array.isArray(data)) {
-      console.error("processFeesBreakdown: data is not an array", data);
-      return [];
-    }
-    const statusBreakdown = {
-      PAID: 0,
-      PARTIALLY_PAID: 0,
-      UNPAID: 0,
-    };
-
-    data.forEach((violation) => {
-      const paidAmount = violation.payments?.reduce((sum, payment) => sum + payment.amount, 0) || 0;
-      const remaining = violation.fineAmount - paidAmount;
-
-      if (violation.status === "PAID") {
-        statusBreakdown.PAID += violation.fineAmount;
-      } else if (violation.status === "PARTIALLY_PAID") {
-        statusBreakdown.PARTIALLY_PAID += paidAmount;
-        statusBreakdown.UNPAID += remaining;
-      } else {
-        statusBreakdown.UNPAID += violation.fineAmount;
+    filteredViolations.forEach((violation) => {
+      const monthKey = format(new Date(violation.dateTime), "yyyy-MM");
+      if (monthMap[monthKey] !== undefined) {
+        monthMap[monthKey] += 1;
       }
     });
 
-    return [
-      { status: "Paid", amount: statusBreakdown.PAID, fill: "hsl(var(--chart-1))" },
-      { status: "Partially Paid", amount: statusBreakdown.PARTIALLY_PAID, fill: "hsl(var(--chart-2))" },
-      { status: "Unpaid", amount: statusBreakdown.UNPAID, fill: "hsl(var(--chart-3))" },
-    ];
+    const chartData = Object.entries(monthMap)
+      .map(([month, violations]) => ({
+        month: format(new Date(month), "MMMM"),
+        violations,
+      }))
+      .sort((a, b) => {
+        const monthOrder = ["October", "November", "December", "January", "February", "March"];
+        return monthOrder.indexOf(a.month) - monthOrder.indexOf(b.month);
+      });
+
+    setChartData(chartData);
   };
 
-  // Compute trending percentage
-  const computeTrend = (data: { month: string; value: number }[], key: string) => {
-    if (data.length < 2) return { percentage: 5.2, isUp: true }; // Default to 5.2% as per screenshot
-    const lastMonth = data[data.length - 1][key];
-    const previousMonth = data[data.length - 2][key];
-    if (previousMonth === 0) return { percentage: 0, isUp: true };
-    const percentageChange = ((lastMonth - previousMonth) / previousMonth) * 100;
-    return {
-      percentage: Math.abs(percentageChange).toFixed(1),
-      isUp: percentageChange >= 0,
+  const updateFinesBreakdown = () => {
+    const flatViolations = vehicles.flatMap((group) => group.violations);
+    console.log("Flat violations for fines breakdown:", flatViolations);
+
+    const statusMap: { [key: string]: number } = {
+      unpaid: 0,
+      partiallypaid: 0,
+      paid: 0,
     };
+
+    flatViolations.forEach((violation) => {
+      console.log("Processing violation for fines:", violation);
+      const paidAmount = violation.payments?.reduce((sum, p) => sum + p.amount, 0) || 0;
+      console.log("Paid amount:", paidAmount, "Fine amount:", violation.fineAmount);
+      const remaining = violation.fineAmount - paidAmount;
+      console.log("Remaining:", remaining);
+      if (remaining === 0) {
+        statusMap.paid += violation.fineAmount;
+      } else if (paidAmount === 0) {
+        statusMap.unpaid += violation.fineAmount;
+      } else {
+        statusMap.partiallypaid += violation.fineAmount;
+      }
+    });
+
+    const finesData = Object.entries(statusMap)
+      .map(([status, amount]) => ({
+        status,
+        amount,
+      }))
+      .filter((entry) => entry.amount > 0);
+    console.log("Fines breakdown data:", finesData);
+    console.log("Total fines calculated:", totalFines);
+
+    if (finesData.length === 0) {
+      console.warn("No valid fines data to display in breakdown chart");
+    }
+
+    setFinesBreakdownData(finesData);
   };
 
-  const violationsData = processMonthlyViolations(violations);
-  const finesData = processMonthlyFines(payments);
-  const vehicleTypesData = processVehicleTypeViolations(violations);
-  const feesBreakdownData = processFeesBreakdown(violations);
+  const updateVehicleTypeData = () => {
+    const flatViolations = vehicles.flatMap((group) => group.violations);
+    const endDate = new Date("2025-03-16");
+    const startDate = startOfMonth(subMonths(endDate, 5));
 
-  const totalFees = feesBreakdownData.reduce((acc, curr) => acc + curr.amount, 0);
+    const filteredViolations = flatViolations.filter((violation) => {
+      const violationDate = new Date(violation.dateTime);
+      return violationDate >= startDate && violationDate <= endDate;
+    });
 
-  const violationsTrend = computeTrend(violationsData.map(d => ({ month: d.month, value: d.violations })), "value");
-  const finesTrend = computeTrend(finesData.map(d => ({ month: d.month, value: d.fines })), "value");
-  const multicabTrend = computeTrend(vehicleTypesData.map(d => ({ month: d.month, value: d.multicab })), "value");
-  const vanTrend = computeTrend(vehicleTypesData.map(d => ({ month: d.month, value: d.van })), "value");
+    const monthVehicleMap: { [key: string]: { multicab: number; van: number } } = {};
+    filteredViolations.forEach((violation) => {
+      const monthKey = format(new Date(violation.dateTime), "yyyy-MM");
+      if (!monthVehicleMap[monthKey]) {
+        monthVehicleMap[monthKey] = { multicab: 0, van: 0 };
+      }
+      if (violation.vehicle.vehicleType === "MULTICAB") {
+        monthVehicleMap[monthKey].multicab += 1;
+      } else if (violation.vehicle.vehicleType === "VAN") {
+        monthVehicleMap[monthKey].van += 1;
+      }
+    });
 
-  if (status === "loading" || loading) {
-    return <div>Loading...</div>;
+    const vehicleData = Object.entries(monthVehicleMap)
+      .map(([month, counts]) => ({
+        month: format(new Date(month), "MMMM"),
+        multicab: counts.multicab,
+        van: counts.van,
+      }))
+      .sort((a, b) => {
+        const monthOrder = ["October", "November", "December", "January", "February", "March"];
+        return monthOrder.indexOf(a.month) - monthOrder.indexOf(b.month);
+      });
+
+    setVehicleTypeData(vehicleData);
+  };
+
+  const updateAllViolations = () => {
+    const flatViolations = vehicles.flatMap((group) => group.violations);
+    const sortedViolations = flatViolations.sort((a, b) => {
+      return new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime();
+    });
+    setAllViolations(sortedViolations);
+  };
+
+  const totalFines = finesBreakdownData.reduce((sum, d) => sum + d.amount, 0);
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-1 flex-col gap-4 p-4 overflow-x-hidden max-w-full">
+        <Skeleton className="h-8 w-[200px]" />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card className="w-full max-w-full flex-1">
+            <CardHeader>
+              <Skeleton className="h-4 w-[150px]" />
+              <Skeleton className="h-3 w-[200px] mt-2" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-[150px] w-full" />
+            </CardContent>
+          </Card>
+          <Card className="w-full max-w-full flex-1">
+            <CardHeader>
+              <Skeleton className="h-4 w-[150px]" />
+              <Skeleton className="h-3 w-[200px] mt-2" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-[150px] w-full" />
+            </CardContent>
+          </Card>
+          <Card className="w-full max-w-full flex-1">
+            <CardHeader>
+              <Skeleton className="h-4 w-[150px]" />
+              <Skeleton className="h-3 w-[200px] mt-2" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-[150px] w-full" />
+            </CardContent>
+          </Card>
+        </div>
+        <Card className="w-full max-w-full">
+          <CardHeader>
+            <Skeleton className="h-4 w-[150px]" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-[200px] w-full" />
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
-  if (error) {
-    return <div className="p-4 text-red-500">Error: {error}</div>;
+  if (status === "unauthenticated") {
+    return null;
+  }
+
+  if (!session) {
+    return <div>Session not available</div>;
   }
 
   return (
     <SidebarInset>
-        <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12">
-        <div className="flex items-center gap-2 px-4">
+      <header className="sticky top-0 flex h-14 shrink-0 items-center gap-2 border-b bg-background p-4">
         <SidebarTrigger className="-ml-1" />
         <Separator orientation="vertical" className="mr-2 h-4" />
         <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink href="#">Traffic Violations</BreadcrumbLink>
+              <BreadcrumbLink href="#">Home</BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator className="hidden md:block" />
             <BreadcrumbItem>
@@ -324,219 +353,217 @@ export default function DashboardPage() {
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
-        </div>
       </header>
-      <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Total Number of Violations */}
-          <Card className="w-full">
+      <div className="flex flex-1 flex-col gap-4 p-4 overflow-x-hidden max-w-full">
+        <h2 className="text-2xl font-bold">Dashboard</h2>
+
+        {/* Charts in 1 row, 3 columns */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Violation Trends (Last 6 Months) */}
+          <Card className="w-full max-w-full flex-1">
             <CardHeader>
-              <CardTitle>Total Number of Violations</CardTitle>
+              <CardTitle>Vehicle Violations</CardTitle>
               <CardDescription>October 2024 - March 2025</CardDescription>
             </CardHeader>
-            <CardContent className="p-4">
-              <ChartContainer config={chartConfig}>
-                <BarChart accessibilityLayer data={violationsData}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
+            <CardContent className="flex items-center justify-center">
+              <ChartContainer config={chartConfig} className="h-auto w-full max-w-full min-h-[150px]">
+                <BarChart accessibilityLayer data={chartData}>
+                  <CartesianGrid vertical={false} />
                   <XAxis
                     dataKey="month"
                     tickLine={false}
                     tickMargin={10}
                     axisLine={false}
-                    tickFormatter={(value) => value}
+                    tickFormatter={(value) => value.slice(0, 3)}
                   />
-                  <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
-                  <Bar dataKey="violations" fill="var(--color-violations)" radius={8} />
+                  <ChartTooltip
+                    cursor={false}
+                    content={<ChartTooltipContent hideLabel />}
+                  />
+                  <Bar
+                    dataKey="violations"
+                    fill="var(--color-violations)"
+                    radius={8}
+                  />
                 </BarChart>
               </ChartContainer>
             </CardContent>
-            <CardFooter className="flex-col items-start gap-2 text-sm p-4">
-              <div className="flex gap-2 font-medium leading-none">
-                {violationsTrend.isUp ? (
-                  <>
-                    Trending up by {violationsTrend.percentage}% this month <TrendingUp className="h-4 w-4" />
-                  </>
-                ) : (
-                  <>
-                    Trending down by {violationsTrend.percentage}% this month <TrendingDown className="h-4 w-4" />
-                  </>
-                )}
-              </div>
-              <div className="leading-none text-muted-foreground">
-                Showing total violations for the last 6 months
-              </div>
-            </CardFooter>
           </Card>
 
-          {/* Total Fines Collected */}
-          <Card className="w-full">
-            <CardHeader>
-              <CardTitle>Total Fines Collected</CardTitle>
+          {/* Total Fines Breakdown */}
+          <Card className="w-full max-w-full flex flex-col">
+            <CardHeader className="items-center pb-0">
+              <CardTitle>Total Fines Breakdown</CardTitle>
               <CardDescription>October 2024 - March 2025</CardDescription>
             </CardHeader>
-            <CardContent className="p-4">
-              <ChartContainer config={chartConfig}>
-                <BarChart accessibilityLayer data={finesData} margin={{ top: 20 }}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="month"
-                    tickLine={false}
-                    tickMargin={10}
-                    axisLine={false}
-                    tickFormatter={(value) => value}
-                  />
-                  <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel currency="PHP" />} />
-                  <Bar dataKey="fines" fill="var(--color-fines)" radius={8}>
-                    <LabelList
-                      position="top"
-                      offset={12}
-                      className="fill-foreground"
-                      fontSize={12}
-                      formatter={(value: number) => `₱${value.toLocaleString()}`}
+            <CardContent className="flex-1 pb-0">
+              <ChartContainer
+                config={chartConfig}
+                className="mx-auto aspect-square w-full max-w-full min-h-[150px]"
+              >
+                {finesBreakdownData.length > 0 ? (
+                  <PieChart>
+                    <ChartTooltip
+                      cursor={false}
+                      content={<ChartTooltipContent hideLabel />}
                     />
-                  </Bar>
-                </BarChart>
+                    <Pie
+                      data={finesBreakdownData}
+                      dataKey="amount"
+                      nameKey="status"
+                      innerRadius={60}
+                      outerRadius={80}
+                      strokeWidth={5}
+                    >
+                      {finesBreakdownData.map((entry, index) => (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={chartConfig[entry.status.toLowerCase()]?.color || "gray"}
+                        />
+                      ))}
+                      <Label
+                        content={({ viewBox }) => {
+                          console.log("ViewBox for pie chart:", viewBox); // Debug viewBox
+                          console.log("Total Fines to display:", totalFines); // Debug totalFines
+                          if (viewBox && "cx" in viewBox && "cy" in viewBox) {
+                            return (
+                              <text
+                                x={viewBox.cx}
+                                y={viewBox.cy}
+                                textAnchor="middle"
+                                dominantBaseline="middle"
+                              >
+                                <tspan
+                                  x={viewBox.cx}
+                                  y={viewBox.cy}
+                                  className="fill-foreground text-3xl font-bold"
+                                >
+                                  ₱{totalFines.toLocaleString()}
+                                </tspan>
+                                <tspan
+                                  x={viewBox.cx}
+                                  y={(viewBox.cy || 0) + 24}
+                                  className="fill-muted-foreground"
+                                >
+                                  Total Fines
+                                </tspan>
+                              </text>
+                            );
+                          }
+                          console.warn("ViewBox missing cx or cy, cannot render label");
+                          return null; // Return null if viewBox is invalid
+                        }}
+                      />
+                    </Pie>
+                  </PieChart>
+                ) : (
+                  <div className="text-center text-muted-foreground">
+                    No fines data available
+                  </div>
+                )}
               </ChartContainer>
             </CardContent>
-            <CardFooter className="flex-col items-start gap-2 text-sm p-4">
-              <div className="flex gap-2 font-medium leading-none">
-                {finesTrend.isUp ? (
-                  <>
-                    Trending up by {finesTrend.percentage}% this month <TrendingUp className="h-4 w-4" />
-                  </>
-                ) : (
-                  <>
-                    Trending down by {finesTrend.percentage}% this month <TrendingDown className="h-4 w-4" />
-                  </>
-                )}
-              </div>
-              <div className="leading-none text-muted-foreground">
-                Showing total fines collected for the last 6 months
-              </div>
-            </CardFooter>
           </Card>
 
           {/* Violations by Vehicle Type */}
-          <Card className="w-full">
+          <Card className="w-full max-w-full flex-1">
             <CardHeader>
               <CardTitle>Violations by Vehicle Type</CardTitle>
-              <CardDescription>October 2024 - March 2025</CardDescription>
+              <CardDescription>Showing vehicle type violation for the last 6 months</CardDescription>
             </CardHeader>
-            <CardContent className="p-4">
-              <ChartContainer config={chartConfig}>
-                <LineChart accessibilityLayer data={vehicleTypesData} margin={{ left: 12, right: 12 }}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
+            <CardContent className="flex items-center justify-center">
+              <ChartContainer config={chartConfig} className="h-auto w-full max-w-full min-h-[150px]">
+                <AreaChart
+                  accessibilityLayer
+                  data={vehicleTypeData}
+                  margin={{
+                    left: 12,
+                    right: 12,
+                  }}
+                >
+                  <CartesianGrid vertical={false} />
                   <XAxis
                     dataKey="month"
                     tickLine={false}
                     axisLine={false}
                     tickMargin={8}
-                    tickFormatter={(value) => value}
+                    tickFormatter={(value) => value.slice(0, 3)}
                   />
-                  <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
-                  <Line
+                  <ChartTooltip
+                    cursor={false}
+                    content={<ChartTooltipContent indicator="line" />}
+                  />
+                  <Area
                     dataKey="multicab"
-                    type="monotone"
+                    type="natural"
+                    fill="var(--color-multicab)"
+                    fillOpacity={0.4}
                     stroke="var(--color-multicab)"
-                    strokeWidth={2}
-                    dot={false}
+                    stackId="a"
                   />
-                  <Line
+                  <Area
                     dataKey="van"
-                    type="monotone"
+                    type="natural"
+                    fill="var(--color-van)"
+                    fillOpacity={0.4}
                     stroke="var(--color-van)"
-                    strokeWidth={2}
-                    dot={false}
+                    stackId="a"
                   />
-                </LineChart>
+                  <ChartLegend content={<ChartLegendContent />} />
+                </AreaChart>
               </ChartContainer>
             </CardContent>
-            <CardFooter className="flex-col items-start gap-2 text-sm p-4">
-              <div className="flex gap-2 font-medium leading-none">
-                {multicabTrend.isUp ? (
-                  <>
-                    Multicab trending up by {multicabTrend.percentage}% this month <TrendingUp className="h-4 w-4" />
-                  </>
-                ) : (
-                  <>
-                    Multicab trending down by {multicabTrend.percentage}% this month <TrendingDown className="h-4 w-4" />
-                  </>
-                )}
-              </div>
-              <div className="leading-none text-muted-foreground">
-                Showing violations by vehicle type for the last 6 months
-              </div>
-            </CardFooter>
-          </Card>
-
-          {/* Total Fees Breakdown */}
-          <Card className="w-full">
-            <CardHeader className="items-center pb-0">
-              <CardTitle>Total Fees Breakdown</CardTitle>
-              <CardDescription>October 2024 - March 2025</CardDescription>
-            </CardHeader>
-            <CardContent className="p-4 flex-1 pb-0">
-              <ChartContainer config={chartConfig} className="mx-auto aspect-square max-h-[250px]">
-                <PieChart>
-                  <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel currency="PHP" />} />
-                  <Pie
-                    data={feesBreakdownData}
-                    dataKey="amount"
-                    nameKey="status"
-                    innerRadius={60}
-                    strokeWidth={5}
-                  >
-                    <Label
-                      content={({ viewBox }) => {
-                        if (viewBox && "cx" in viewBox && "cy" in viewBox) {
-                          return (
-                            <text
-                              x={viewBox.cx}
-                              y={viewBox.cy}
-                              textAnchor="middle"
-                              dominantBaseline="middle"
-                            >
-                              <tspan
-                                x={viewBox.cx}
-                                y={viewBox.cy}
-                                className="fill-foreground text-3xl font-bold"
-                              >
-                                ₱{totalFees.toLocaleString()}
-                              </tspan>
-                              <tspan
-                                x={viewBox.cx}
-                                y={(viewBox.cy || 0) + 24}
-                                className="fill-muted-foreground"
-                              >
-                                Total Fees
-                              </tspan>
-                            </text>
-                          );
-                        }
-                      }}
-                    />
-                  </Pie>
-                </PieChart>
-              </ChartContainer>
-            </CardContent>
-            <CardFooter className="flex-col gap-2 text-sm p-4">
-              <div className="flex gap-2 font-medium leading-none">
-                {finesTrend.isUp ? (
-                  <>
-                    Trending up by {finesTrend.percentage}% this month <TrendingUp className="h-4 w-4" />
-                  </>
-                ) : (
-                  <>
-                    Trending down by {finesTrend.percentage}% this month <TrendingDown className="h-4 w-4" />
-                  </>
-                )}
-              </div>
-              <div className="leading-none text-muted-foreground">
-                Breakdown of total fees for the last 6 months
-              </div>
-            </CardFooter>
           </Card>
         </div>
+
+        {/* All Violations Table (Sorted Latest to Oldest) */}
+        <Card className="w-full max-w-full">
+          <CardHeader>
+            <CardTitle>Latest Violations</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Plate Number</TableHead>
+                  <TableHead>Vehicle Type</TableHead>
+                  <TableHead>Violation Type</TableHead>
+                  <TableHead>Fine Amount</TableHead>
+                  <TableHead>Remaining Balance</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {allViolations.length > 0 ? (
+                  allViolations.map((violation) => {
+                    const paidAmount = violation.payments?.reduce((sum, p) => sum + p.amount, 0) || 0;
+                    const remaining = violation.fineAmount - paidAmount;
+                    return (
+                      <TableRow key={violation.id}>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {format(new Date(violation.dateTime), "MMMM dd, yyyy")}
+                        </TableCell>
+                        <TableCell>{violation.vehicle.plateNumber}</TableCell>
+                        <TableCell>{violation.vehicle.vehicleType}</TableCell>
+                        <TableCell>{violation.violationType}</TableCell>
+                        <TableCell>₱{violation.fineAmount.toFixed(0)}</TableCell>
+                        <TableCell>₱{remaining.toFixed(0)}</TableCell>
+                        <TableCell>{violation.status}</TableCell>
+                      </TableRow>
+                    );
+                  })
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center text-muted-foreground">
+                      No violations found.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       </div>
     </SidebarInset>
   );

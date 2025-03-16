@@ -3,9 +3,29 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
+import { Separator } from "@/components/ui/separator";
+import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useSession } from "next-auth/react";
+import { toast } from "sonner";
+import { Plus, Edit2, ToggleRight, ToggleLeft } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -14,133 +34,62 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  RadioGroup,
-  RadioGroupItem,
-} from "@/components/ui/radio-group";
-import { Label } from "@/components/ui/label";
-import { useSession } from "next-auth/react";
-import { toast } from "sonner";
-import { Plus, Pencil, ToggleLeft, ToggleRight, Search, Shield, TrafficCone } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 
 type User = {
-  id: string; // Changed to string for UUID
-  username: string;
+  id: string;
   fullName: string;
+  username: string;
   email: string;
-  phone: string;
-  position: string;
   role: string;
-  active: boolean;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type PaginatedResponse = {
-  users: User[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
+  active: boolean; // Changed from isActive to active
 };
 
 export default function UsersPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [users, setUsers] = useState<User[]>([]);
-  const [searchUsername, setSearchUsername] = useState("");
-  const [page, setPage] = useState(1);
-  const [totalItems, setTotalItems] = useState(0);
-  const [limit] = useState(10);
-  const [totalPages, setTotalPages] = useState(1);
+  const [isLoading, setIsLoading] = useState(true);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [deactivateUserId, setDeactivateUserId] = useState<string | null>(null);
-  const [formData, setFormData] = useState({
-    username: "",
-    password: "",
-    fullName: "",
-    email: "",
-    phone: "",
-    position: "",
-    role: "TRAFFIC_ENFORCER",
-    active: true,
-  });
+  const [newUser, setNewUser] = useState({ fullName: "", username: "", email: "", password: "", role: "USER", active: true });
 
   useEffect(() => {
-    if (status === "unauthenticated" || (status === "authenticated" && session?.user.role !== "ADMIN")) {
-      router.push("/violations");
+    if (status === "unauthenticated") {
+      router.push("/auth/signin");
       return;
     }
-
-    fetchUsers();
-  }, [status, page, searchUsername, router, session]);
+    if (status === "authenticated") {
+      fetchUsers().finally(() => setIsLoading(false));
+    }
+  }, [status, router]);
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch(`/api/users?page=${page}&limit=${limit}`, {
+      const response = await fetch(`/api/users?page=1&limit=1000`, {
         credentials: "include",
       });
       if (!response.ok) {
-        let errorData;
-        const clonedResponse = response.clone();
-        try {
-          errorData = await response.json();
-        } catch (jsonError) {
-          console.error("Failed to parse JSON response:", jsonError);
-          const rawText = await clonedResponse.text();
-          console.error("Raw response body:", rawText);
-          errorData = { error: rawText || "No error message provided" };
-        }
-        console.error("Fetch users failed:", {
-          status: response.status,
-          statusText: response.statusText,
-          errorData,
-          headers: Object.fromEntries(response.headers.entries()),
-        });
-        throw new Error(errorData.error || `Failed to fetch users (Status: ${response.status})`);
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to fetch users");
       }
-      const data: PaginatedResponse = await response.json();
-      console.log("Fetch users response:", data);
-
-      let filteredUsers = data.users;
-      if (searchUsername) {
-        filteredUsers = filteredUsers.filter((user) =>
-          user.username.toLowerCase().includes(searchUsername.toLowerCase())
-        );
-      }
-
-      setUsers(filteredUsers);
-      setTotalPages(Math.ceil(data.total / limit));
-      setTotalItems(data.total);
+      const data = await response.json();
+      console.log("Fetched users:", data);
+      setUsers(data.users || []);
     } catch (error) {
       console.error("Error fetching users:", error);
       toast.error(error instanceof Error ? error.message : "Failed to fetch users");
+      setUsers([]);
     }
   };
 
-  const handlePageChange = (newPage: number) => {
-    if (newPage >= 1 && newPage <= totalPages) {
-      setPage(newPage);
-    }
-  };
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCreateUser = async () => {
     try {
       const response = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(newUser),
         credentials: "include",
       });
       if (!response.ok) {
@@ -148,18 +97,9 @@ export default function UsersPage() {
         throw new Error(errorData.error || "Failed to create user");
       }
       await response.json();
-      setShowCreateDialog(false);
-      setFormData({
-        username: "",
-        password: "",
-        fullName: "",
-        email: "",
-        phone: "",
-        position: "",
-        role: "TRAFFIC_ENFORCER",
-        active: true,
-      });
       toast.success("User created successfully!");
+      setShowCreateDialog(false);
+      setNewUser({ fullName: "", username: "", email: "", password: "", role: "USER", active: true });
       fetchUsers();
     } catch (error) {
       console.error("Error creating user:", error);
@@ -167,14 +107,13 @@ export default function UsersPage() {
     }
   };
 
-  const handleUpdate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleEditUser = async () => {
     if (!selectedUser) return;
     try {
-      const response = await fetch(`/api/users?id=${selectedUser.id}`, {
+      const response = await fetch(`/api/users/${selectedUser.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({ ...selectedUser, password: newUser.password || selectedUser.password }),
         credentials: "include",
       });
       if (!response.ok) {
@@ -182,19 +121,10 @@ export default function UsersPage() {
         throw new Error(errorData.error || "Failed to update user");
       }
       await response.json();
+      toast.success("User updated successfully!");
       setShowEditDialog(false);
       setSelectedUser(null);
-      setFormData({
-        username: "",
-        password: "",
-        fullName: "",
-        email: "",
-        phone: "",
-        position: "",
-        role: "TRAFFIC_ENFORCER",
-        active: true,
-      });
-      toast.success("User updated successfully!");
+      setNewUser({ fullName: "", username: "", email: "", password: "", role: "USER", active: true });
       fetchUsers();
     } catch (error) {
       console.error("Error updating user:", error);
@@ -202,424 +132,312 @@ export default function UsersPage() {
     }
   };
 
-  const handleToggleActive = async (id: string, currentActive: boolean) => {
+  const handleToggleActive = async (id: string) => {
+    const user = users.find((u) => u.id === id);
+    if (!user) return;
     try {
-      const response = await fetch(`/api/users?id=${id}`, {
-        method: currentActive ? "DELETE" : "PUT",
+      const response = await fetch(`/api/users/${id}/toggle-active`, {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ active: !currentActive }),
+        body: JSON.stringify({ active: !user.active }), // Changed from isActive to active
         credentials: "include",
       });
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Failed to ${currentActive ? "deactivate" : "activate"} user`);
+        const text = await response.text(); // Log raw response for debugging
+        console.error("Toggle active response text:", text);
+        const errorData = await response.json().catch(() => ({ error: "Invalid JSON response" }));
+        throw new Error(errorData.error || "Failed to toggle user status");
       }
       await response.json();
-      setDeactivateUserId(null);
-      toast.success(`User ${currentActive ? "deactivated" : "activated"} successfully!`);
+      toast.success(`User ${user.active ? "deactivated" : "activated"} successfully!`);
       fetchUsers();
     } catch (error) {
-      console.error(`Error ${currentActive ? "deactivating" : "activating"} user:`, error);
-      toast.error(error instanceof Error ? error.message : `Failed to ${currentActive ? "deactivate" : "activate"} user`);
+      console.error("Error toggling user status:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to toggle user status");
     }
   };
 
-  if (status === "loading") {
-    return <div>Loading...</div>;
+  if (isLoading) {
+    return (
+      <SidebarInset>
+        <header className="sticky top-0 flex h-14 shrink-0 items-center gap-2 border-b bg-background p-4">
+          <Skeleton className="h-8 w-8 rounded-full" />
+          <Separator orientation="vertical" className="mr-2 h-4" />
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem className="hidden md:block">
+                <Skeleton className="h-4 w-16" />
+              </BreadcrumbItem>
+              <BreadcrumbSeparator className="hidden md:block" />
+              <BreadcrumbItem className="hidden md:block">
+                <Skeleton className="h-4 w-20" />
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+          <div className="ml-auto flex space-x-2">
+            <Skeleton className="h-8 w-8 rounded" />
+          </div>
+        </header>
+        <div className="flex flex-1 flex-col gap-4 p-4">
+          <Skeleton className="h-8 w-[200px]" />
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead><Skeleton className="h-4 w-24" /></TableHead>
+                <TableHead><Skeleton className="h-4 w-32" /></TableHead>
+                <TableHead><Skeleton className="h-4 w-20" /></TableHead>
+                <TableHead className="text-right"><Skeleton className="h-4 w-20 ml-auto" /></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {[...Array(5)].map((_, index) => (
+                <TableRow key={index}>
+                  <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+                  <TableCell className="text-right"><Skeleton className="h-4 w-16 ml-auto" /></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </SidebarInset>
+    );
   }
 
-  if (status === "authenticated" && session?.user.role !== "ADMIN") {
-    return <div>Access Denied: Only admins can view the users page.</div>;
+  if (status === "unauthenticated") {
+    return null;
+  }
+
+  const isAdmin = session?.user?.role === "ADMIN";
+
+  if (!session) {
+    return <div>Session not available</div>;
   }
 
   return (
-    <div className="container mx-auto p-4">
-      <h1 className="text-3xl font-bold mb-6">Users</h1>
-      <Card>
-        <CardHeader>
-          <CardTitle>List of Users</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex justify-between mb-4 space-x-4">
-            <div className="relative max-w-xs">
-              <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search by Username"
-                value={searchUsername}
-                onChange={(e) => setSearchUsername(e.target.value)}
-                className="pl-8"
-              />
-            </div>
-            <Button onClick={() => setShowCreateDialog(true)}>
-              <Plus className="mr-2 h-4 w-4" /> Create User
+    <SidebarInset>
+      <header className="sticky top-0 flex h-14 shrink-0 items-center gap-2 border-b bg-background p-4">
+        <SidebarTrigger className="-ml-1" />
+        <Separator orientation="vertical" className="mr-2 h-4" />
+        <Breadcrumb>
+          <BreadcrumbList>
+            <BreadcrumbItem className="hidden md:block">
+              <BreadcrumbLink href="#">Home</BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator className="hidden md:block" />
+            <BreadcrumbItem>
+              <BreadcrumbPage>Users</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
+        {isAdmin && (
+          <div className="ml-auto flex space-x-2">
+            <Button variant="ghost" size="sm" onClick={() => setShowCreateDialog(true)}>
+              <Plus className="h-4 w-4" />
             </Button>
           </div>
-
-          {/* Users Table */}
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>ID</TableHead>
-                  <TableHead>Username</TableHead>
-                  <TableHead>Full Name</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Phone</TableHead>
-                  <TableHead>Position</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Active</TableHead>
-                  <TableHead>Created At</TableHead>
-                  <TableHead>Updated At</TableHead>
-                  <TableHead>Actions</TableHead>
+        )}
+      </header>
+      <div className="flex flex-1 flex-col gap-4 p-4">
+        <h2 className="text-2xl font-bold flex items-center gap-2">Users</h2>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Full Name</TableHead>
+              <TableHead>Username</TableHead>
+              <TableHead>Email</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {users.length > 0 ? (
+              users.map((user) => (
+                <TableRow key={user.id}>
+                  <TableCell>{user.fullName}</TableCell>
+                  <TableCell>{user.username}</TableCell>
+                  <TableCell>{user.email}</TableCell>
+                  <TableCell>{user.role}</TableCell>
+                  <TableCell className="text-right">
+                    {isAdmin && (
+                      <div className="flex space-x-2 justify-end">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedUser(user);
+                            setNewUser({ ...user, password: "" });
+                            setShowEditDialog(true);
+                          }}
+                        >
+                          <Edit2 className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleToggleActive(user.id)}
+                        >
+                          {user.active ? (
+                            <ToggleLeft className="h-4 w-4" />
+                          ) : (
+                            <ToggleRight className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </div>
+                    )}
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {users.map((user) => (
-                  <TableRow key={user.id}>
-                    <TableCell>{user.id}</TableCell>
-                    <TableCell>{user.username}</TableCell>
-                    <TableCell>{user.fullName}</TableCell>
-                    <TableCell>{user.email}</TableCell>
-                    <TableCell>{user.phone}</TableCell>
-                    <TableCell>{user.position}</TableCell>
-                    <TableCell>{user.role}</TableCell>
-                    <TableCell>{user.active ? "Active" : "Inactive"}</TableCell>
-                    <TableCell>{new Date(user.createdAt).toLocaleString()}</TableCell>
-                    <TableCell>{new Date(user.updatedAt).toLocaleString()}</TableCell>
-                    <TableCell className="flex space-x-2">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => {
-                          setSelectedUser(user);
-                          setFormData({
-                            username: user.username,
-                            password: "",
-                            fullName: user.fullName,
-                            email: user.email,
-                            phone: user.phone,
-                            position: user.position,
-                            role: user.role,
-                            active: user.active,
-                          });
-                          setShowEditDialog(true);
-                        }}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setDeactivateUserId(user.id)}
-                      >
-                        {user.active ? (
-                          <ToggleLeft className="h-4 w-4 text-red-500" />
-                        ) : (
-                          <ToggleRight className="h-4 w-4 text-green-500" />
-                        )}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+              ))
+            ) : (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center text-muted-foreground">
+                  No users found.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
 
-          {/* Pagination */}
-          <div className="flex justify-end mt-4">
-            <div className="flex space-x-2">
-              <Button
-                variant="outline"
-                disabled={page === 1}
-                onClick={() => handlePageChange(page - 1)}
-              >
-                Previous
-              </Button>
-              {Array.from({ length: totalPages }, (_, idx) => idx + 1).map((p) => (
-                <Button
-                  key={p}
-                  variant={p === page ? "default" : "outline"}
-                  onClick={() => handlePageChange(p)}
+        {/* Create User Dialog */}
+        <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+          <DialogContent className="sm:max-w-[600px]">
+            <DialogHeader>
+              <DialogTitle>Create User</DialogTitle>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="fullName">Full Name</Label>
+                <Input
+                  id="fullName"
+                  value={newUser.fullName}
+                  onChange={(e) => setNewUser({ ...newUser, fullName: e.target.value })}
+                  placeholder="Enter full name"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="username">Username</Label>
+                <Input
+                  id="username"
+                  value={newUser.username}
+                  onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
+                  placeholder="Enter username"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={newUser.email}
+                  onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                  placeholder="Enter email"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={newUser.password}
+                  onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                  placeholder="Enter password"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="role">Role</Label>
+                <select
+                  id="role"
+                  value={newUser.role}
+                  onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+                  className="border rounded-md p-2"
                 >
-                  {p}
-                </Button>
-              ))}
-              <Button
-                variant="outline"
-                disabled={page === totalPages}
-                onClick={() => handlePageChange(page + 1)}
-              >
-                Next
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Create User Dialog */}
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create User</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleCreate} className="space-y-6">
-            <div>
-              <Label>Username</Label>
-              <Input
-                value={formData.username}
-                onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                required
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label>Full Name</Label>
-              <Input
-                value={formData.fullName}
-                onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
-                required
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label>Email</Label>
-              <Input
-                type="email"
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                required
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label>Phone</Label>
-              <Input
-                value={formData.phone}
-                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                required
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label>Position</Label>
-              <Input
-                value={formData.position}
-                onChange={(e) => setFormData({ ...formData, position: e.target.value })}
-                required
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label>Password</Label>
-              <Input
-                type="password"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                required
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label>Role</Label>
-              <RadioGroup
-                value={formData.role}
-                onValueChange={(value) => setFormData({ ...formData, role: value })}
-                className="grid grid-cols-2 gap-4 mt-2"
-              >
-                <div>
-                  <RadioGroupItem value="ADMIN" id="admin" className="peer sr-only" />
-                  <Label
-                    htmlFor="admin"
-                    className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-transparent p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary"
-                  >
-                    <Shield className="mb-3 h-6 w-6" />
-                    Admin
-                  </Label>
-                </div>
-                <div>
-                  <RadioGroupItem value="TRAFFIC_ENFORCER" id="traffic_enforcer" className="peer sr-only" />
-                  <Label
-                    htmlFor="traffic_enforcer"
-                    className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-transparent p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary"
-                  >
-                    <TrafficCone className="mb-3 h-6 w-6" />
-                    Traffic Enforcer
-                  </Label>
-                </div>
-              </RadioGroup>
+                  <option value="USER">User</option>
+                  <option value="ADMIN">Admin</option>
+                </select>
+              </div>
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setShowCreateDialog(false)}>
+              <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
                 Cancel
               </Button>
-              <Button type="submit">Create</Button>
+              <Button onClick={handleCreateUser} disabled={!newUser.fullName || !newUser.username || !newUser.email || !newUser.password}>
+                Create
+              </Button>
             </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+          </DialogContent>
+        </Dialog>
 
-      {/* Edit User Dialog */}
-      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit User</DialogTitle>
-          </DialogHeader>
-          {selectedUser && (
-            <form onSubmit={handleUpdate} className="space-y-6">
-              <div>
-                <Label>Username</Label>
-                <Input
-                  value={formData.username}
-                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                  required
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label>Full Name</Label>
-                <Input
-                  value={formData.fullName}
-                  onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
-                  required
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label>Email</Label>
-                <Input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  required
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label>Phone</Label>
-                <Input
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  required
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label>Position</Label>
-                <Input
-                  value={formData.position}
-                  onChange={(e) => setFormData({ ...formData, position: e.target.value })}
-                  required
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label>Password</Label>
-                <Input
-                  type="password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  placeholder="Leave blank to keep current password"
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label>Role</Label>
-                <RadioGroup
-                  value={formData.role}
-                  onValueChange={(value) => setFormData({ ...formData, role: value })}
-                  className="grid grid-cols-2 gap-4 mt-2"
-                >
-                  <div>
-                    <RadioGroupItem value="ADMIN" id="admin-edit" className="peer sr-only" />
-                    <Label
-                      htmlFor="admin-edit"
-                      className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-transparent p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary"
-                    >
-                      <Shield className="mb-3 h-6 w-6" />
-                      Admin
-                    </Label>
-                  </div>
-                  <div>
-                    <RadioGroupItem value="TRAFFIC_ENFORCER" id="traffic_enforcer-edit" className="peer sr-only" />
-                    <Label
-                      htmlFor="traffic_enforcer-edit"
-                      className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-transparent p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary"
-                    >
-                      <TrafficCone className="mb-3 h-6 w-6" />
-                      Traffic Enforcer
-                    </Label>
-                  </div>
-                </RadioGroup>
-              </div>
-              <div>
-                <Label>Active Status</Label>
-                <RadioGroup
-                  value={formData.active ? "true" : "false"}
-                  onValueChange={(value) => setFormData({ ...formData, active: value === "true" })}
-                  className="grid grid-cols-2 gap-4 mt-2"
-                >
-                  <div>
-                    <RadioGroupItem value="true" id="active-true" className="peer sr-only" />
-                    <Label
-                      htmlFor="active-true"
-                      className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-transparent p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary"
-                    >
-                      <ToggleRight className="mb-3 h-6 w-6 text-green-500" />
-                      Active
-                    </Label>
-                  </div>
-                  <div>
-                    <RadioGroupItem value="false" id="active-false" className="peer sr-only" />
-                    <Label
-                      htmlFor="active-false"
-                      className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-transparent p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary"
-                    >
-                      <ToggleLeft className="mb-3 h-6 w-6 text-red-500" />
-                      Inactive
-                    </Label>
-                  </div>
-                </RadioGroup>
+        {/* Edit User Dialog */}
+        {selectedUser && (
+          <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+            <DialogContent className="sm:max-w-[600px]">
+              <DialogHeader>
+                <DialogTitle>Edit User</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4 py-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="editFullName">Full Name</Label>
+                  <Input
+                    id="editFullName"
+                    value={newUser.fullName}
+                    onChange={(e) => setNewUser({ ...newUser, fullName: e.target.value })}
+                    placeholder="Enter full name"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="editUsername">Username</Label>
+                  <Input
+                    id="editUsername"
+                    value={newUser.username}
+                    onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
+                    placeholder="Enter username"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="editEmail">Email</Label>
+                  <Input
+                    id="editEmail"
+                    type="email"
+                    value={newUser.email}
+                    onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                    placeholder="Enter email"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="editPassword">Password</Label>
+                  <Input
+                    id="editPassword"
+                    type="password"
+                    value={newUser.password}
+                    onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                    placeholder="Leave blank to keep current password"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="editRole">Role</Label>
+                  <select
+                    id="editRole"
+                    value={newUser.role}
+                    onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+                    className="border rounded-md p-2"
+                  >
+                    <option value="USER">User</option>
+                    <option value="ADMIN">Admin</option>
+                  </select>
+                </div>
               </div>
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setShowEditDialog(false)}>
+                <Button variant="outline" onClick={() => setShowEditDialog(false)}>
                   Cancel
                 </Button>
-                <Button type="submit">Update</Button>
+                <Button onClick={handleEditUser} disabled={!newUser.fullName || !newUser.username || !newUser.email}>
+                  Save
+                </Button>
               </DialogFooter>
-            </form>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Deactivate Confirmation Dialog */}
-      <Dialog open={deactivateUserId !== null} onOpenChange={() => setDeactivateUserId(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Confirm Status Change</DialogTitle>
-          </DialogHeader>
-          <DialogDescription>
-            {deactivateUserId && users.find((u) => u.id === deactivateUserId)?.active
-              ? "Are you sure you want to deactivate this user? They will no longer be able to log in."
-              : "Are you sure you want to activate this user? They will be able to log in again."}
-          </DialogDescription>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeactivateUserId(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant={deactivateUserId && users.find((u) => u.id === deactivateUserId)?.active ? "destructive" : "default"}
-              onClick={() => {
-                const user = users.find((u) => u.id === deactivateUserId);
-                if (user) {
-                  handleToggleActive(user.id, user.active);
-                }
-              }}
-            >
-              {deactivateUserId && users.find((u) => u.id === deactivateUserId)?.active ? "Deactivate" : "Activate"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
+            </DialogContent>
+          </Dialog>)}
+        </div>
+      </SidebarInset>
+    );
+  }

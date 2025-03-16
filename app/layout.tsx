@@ -10,8 +10,12 @@ import { SidebarInset, SidebarProvider, useSidebar } from "@/components/ui/sideb
 import { ViolationsProvider } from "./contexts/ViolationsContext";
 
 // Child component to handle SidebarInset with useSidebar
-function LayoutContent({ children, page }: { children: React.ReactNode; page: string }) {
+function LayoutContent({ children, page, showSidebar }: { children: React.ReactNode; page: string; showSidebar: boolean }) {
   const { isOpen } = useSidebar();
+
+  if (!showSidebar) {
+    return <>{children}</>; // Render children without SidebarInset if no sidebar
+  }
 
   return (
     <SidebarInset
@@ -28,27 +32,27 @@ function LayoutContent({ children, page }: { children: React.ReactNode; page: st
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const page = pathname?.replace("/", "") || "dashboard";
+  const showSidebar = pathname !== "/auth/signin"; // Hide sidebar on sign-in page
 
   return (
     <html lang="en">
       <body className={cn("min-h-screen bg-gray-100", pathname === "/" && "flex flex-col")}>
         <SessionProviderWrapper>
-
-        <SidebarProvider
+          <SidebarProvider
             style={
-              page === 'vehicles' 
+              page === "vehicles"
                 ? {
                     "--sidebar-width": "350px",
                   } as React.CSSProperties
                 : undefined
             }
           >
-
             <ViolationsProvider>
-              <SidebarComponent page={page} />
-              <LayoutContent page={page}>{children}</LayoutContent>
+              {showSidebar && <SidebarComponent page={page} />}
+              <LayoutContent page={page} showSidebar={showSidebar}>
+                {children}
+              </LayoutContent>
             </ViolationsProvider>
-
           </SidebarProvider>
         </SessionProviderWrapper>
 

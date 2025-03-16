@@ -29,6 +29,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { signOut, useSession } from "next-auth/react"; // Added useSession for debugging
 
 export function NavUser({
   user,
@@ -40,6 +41,22 @@ export function NavUser({
   };
 }) {
   const { isMobile } = useSidebar();
+  const { data: session, update } = useSession(); // Use session for debugging
+
+  const handleLogout = async () => {
+    try {
+      console.log("Attempting to log out, current session:", session);
+      const result = await signOut({ callbackUrl: "/auth/signin", redirect: false });
+      console.log("Sign-out result:", result);
+      // Manually update session state and redirect
+      await update(); // Update session to reflect logout
+      console.log("Session after update:", session);
+      window.location.href = "/auth/signin"; // Force redirect as a fallback
+    } catch (error) {
+      console.error("Error during logout:", error);
+      toast.error("Failed to log out. Please try again.");
+    }
+  };
 
   return (
     <SidebarMenu>
@@ -80,29 +97,7 @@ export function NavUser({
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuItem>
-                <Sparkles />
-                Upgrade to Pro
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuItem>
-                <BadgeCheck />
-                Account
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                <CreditCard />
-                Billing
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                <Bell />
-                Notifications
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={handleLogout}>
               <LogOut />
               Log out
             </DropdownMenuItem>

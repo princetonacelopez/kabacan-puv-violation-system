@@ -2,7 +2,7 @@
 "use client";
 
 import * as React from "react";
-import { BarChart, File, FileText, Inbox, Key, Shield, Bus, UserCog } from "lucide-react"; // Replaced Truck with Bus
+import { BarChart, File, FileText, Inbox, Key, Shield, Bus, UserCog, Car } from "lucide-react";
 import { NavUser } from "@/components/nav-user";
 import {
   Sidebar,
@@ -22,8 +22,9 @@ import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { useViolations } from "@/app/contexts/ViolationsContext";
 import { Button } from "@/components/ui/button";
-import { Plus, Upload, Car } from "lucide-react";
+import { Plus, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton"; // Added Skeleton component
 
 type Violation = {
   id: string;
@@ -72,7 +73,7 @@ const sidebarData = {
     {
       title: "Vehicle Types",
       url: "/vehicle-types",
-      icon: Bus, // Using Bus as a placeholder for vehicle types
+      icon: Bus,
       isActive: false,
     },
     {
@@ -110,12 +111,14 @@ const formatDate = (dateStr: string) => {
 
 export function SidebarComponent({
   page,
-  setShowCreateForm,
-  setShowImportDialog,
+  setShowCreateForm = () => {},
+  setShowImportDialog = () => {},
+  isLoading = false, // Add isLoading prop
 }: {
   page: string;
-  setShowCreateForm: (value: boolean) => void;
-  setShowImportDialog: (value: boolean) => void;
+  setShowCreateForm?: (value: boolean) => void;
+  setShowImportDialog?: (value: boolean) => void;
+  isLoading?: boolean;
 }) {
   const { setOpen, isOpen } = useSidebar();
   const router = useRouter();
@@ -193,8 +196,8 @@ export function SidebarComponent({
                       <Command className="size-4" />
                     </div>
                     <div className="grid flex-1 text-left text-sm leading-tight">
-                      <span className="truncate font-semibold">Traffic System</span>
-                      <span className="truncate text-xs">Enterprise</span>
+                      <span className="truncate font-semibold">Kabacan</span>
+                      <span className="truncate text-xs">PUV Violation System</span>
                     </div>
                   </a>
                 </SidebarMenuButton>
@@ -217,6 +220,7 @@ export function SidebarComponent({
                         className="px-2.5 md:px-2"
                       >
                         <item.icon />
+                        <span>{item.title}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   ))}
@@ -272,7 +276,22 @@ export function SidebarComponent({
           <SidebarContent>
             <SidebarGroup className="px-0">
               <SidebarGroupContent>
-                {violationItems.length > 0 ? (
+                {isLoading ? (
+                  // Skeleton loader for vehicle list
+                  <div className="space-y-4 p-4">
+                    {[...Array(5)].map((_, index) => (
+                      <div key={index} className="flex flex-col gap-2 border-b pb-4 last:border-b-0">
+                        <div className="flex items-center gap-2">
+                          <Skeleton className="h-4 w-4" />
+                          <Skeleton className="h-4 w-24" />
+                          <Skeleton className="h-4 w-16 ml-auto" />
+                        </div>
+                        <Skeleton className="h-4 w-[200px]" />
+                        <Skeleton className="h-4 w-20" />
+                      </div>
+                    ))}
+                  </div>
+                ) : violationItems.length > 0 ? (
                   violationItems.map((group: GroupedViolation) => {
                     const totalFine = group.violations.reduce((sum, v) => sum + v.fineAmount, 0);
                     const paidAmount = group.violations
@@ -289,9 +308,9 @@ export function SidebarComponent({
                       >
                         <div className="flex w-full items-center gap-2">
                           {group.vehicleType === "MULTICAB" ? (
-                            <Bus className="h-4 w-4 text-muted-foreground" /> // Correct icon for Multicab
+                            <Bus className="h-4 w-4 text-muted-foreground" />
                           ) : (
-                            <Car className="h-4 w-4 text-muted-foreground" /> // Truck for VAN
+                            <Car className="h-4 w-4 text-muted-foreground" />
                           )}
                           <span>{group.plateNumber}</span>
                           <span className="ml-auto text-xs">
@@ -311,7 +330,7 @@ export function SidebarComponent({
                               ? "success"
                               : status === "UNPAID"
                               ? "destructive"
-                              : "default" // Yellow for PARTIALLY_PAID
+                              : "default"
                           }
                         >
                           {status}
@@ -340,8 +359,8 @@ export function SidebarComponent({
                     <Command className="size-4" />
                   </div>
                   <div className="grid flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-semibold">Traffic System</span>
-                    <span className="truncate text-xs">Enterprise</span>
+                    <span className="truncate font-semibold">Kabacan</span>
+                    <span className="truncate text-xs">PUV Violation System</span>
                   </div>
                 </a>
               </SidebarMenuButton>
@@ -364,6 +383,7 @@ export function SidebarComponent({
                       className="px-2.5 md:px-2"
                     >
                       <item.icon />
+                      <span>{item.title}</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ))}
@@ -385,6 +405,7 @@ export function SidebarComponent({
                       className="px-2.5 md:px-2"
                     >
                       <item.icon />
+                      <span>{item.title}</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ))}
